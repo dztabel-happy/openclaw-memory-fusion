@@ -20,7 +20,7 @@
       },
       "sessions": {
         "enabled": true,
-        "retentionDays": 30
+        "retentionDays": -1
       },
       "scope": {
         "default": "deny",
