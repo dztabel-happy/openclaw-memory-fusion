@@ -92,7 +92,15 @@ workspace/
 │           └── 2026-02-18.md
 ```
 
-### 5. 断网容错
+### 5. `/new` Session 丢失兜底
+
+OpenClaw 的 `sessions_list` 只能看到**当前活跃的 session**。用户执行 `/new` 后旧 session 关闭，cron 就看不到了。
+
+**双保险方案**：
+- **主动 flush**：AGENTS.md 规则要求 agent 检测到 `/new` 意图时，立即将重要内容写入 `memory/YYYY-MM-DD.md`
+- **被动兜底**：Hourly/Daily cron prompt 中加入 `memory_search` 步骤，从 QMD 索引中搜索已关闭 session 的内容（QMD 索引是持久的，不受 session 生命周期影响）
+
+### 6. 断网容错
 
 Cron 依赖 LLM API，断网时会失败。但设计上是**自愈的**：
 - Hourly 检查"最近未处理的活动"，不是"最近 1 小时"
@@ -182,7 +190,7 @@ openclaw cron add \
   --model "google/gemini-3-flash-preview" \
   --timeout-seconds 120 \
   --no-deliver \
-  --message '你是记忆微同步 agent。检查最近 session 是否有新的有价值内容。规则：1.用 sessions_list 查看最近活跃 session；2.没有新的有意义对话（<2条用户消息）直接回复 NO_REPLY；3.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；4.不要重复已记录的内容；5.完成后回复 NO_REPLY'
+  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。规则：1.先用 sessions_list 查看当前活跃 session；2.再用 memory_search 搜索最近的对话内容（搜"今天"、最近话题关键词等），这能覆盖已被 /new 关闭的历史 session；3.没有新的有意义内容（<2条用户消息）直接回复 NO_REPLY；4.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；5.不要重复已记录的内容（先读 memory/YYYY-MM-DD.md 检查）；6.完成后回复 NO_REPLY'
 
 # Layer 2: Daily Sync（每晚蒸馏）
 openclaw cron add \
@@ -194,7 +202,7 @@ openclaw cron add \
   --model "openrouter/minimax/minimax-m2.5" \
   --timeout-seconds 300 \
   --no-deliver \
-  --message '你是每日记忆蒸馏 agent。将今天所有 session 对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天所有 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；4.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；5.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；6.完成后回复 NO_REPLY'
+  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天活跃的 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.额外步骤：用 memory_search 搜索今天的关键词（如日期、项目名等），捕获已被 /new 关闭的历史 session 中的内容；4.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；5.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；6.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；7.完成后回复 NO_REPLY'
 
 # Layer 3: Weekly Tidy（每周巩固）
 openclaw cron add \
@@ -295,6 +303,12 @@ openclaw cron edit <job-id> --disabled
 ```
 
 本方案全在用户空间，不影响任何官方功能。
+
+### Q: 用户执行 /new 后，之前的对话会丢失吗？
+
+不会。双保险机制：
+1. Agent 检测到 `/new` 意图时会主动将重要内容写入 `memory/YYYY-MM-DD.md`
+2. Cron job 通过 `memory_search` 搜索 QMD 索引，能覆盖已关闭的历史 session（`sessions_list` 只能看活跃 session，但 QMD 索引是持久的）
 
 ### Q: 断网/电脑关机时 cron 会丢数据吗？
 
