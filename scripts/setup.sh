@@ -110,7 +110,7 @@ else
     --model "$HOURLY_MODEL" \
     --timeout-seconds 120 \
     --no-deliver \
-    --message '你是记忆微同步 agent。检查最近 session 是否有新的有价值内容。规则：1.用 sessions_list 查看最近活跃 session；2.没有新的有意义对话（<2条用户消息）直接回复 NO_REPLY；3.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；4.不要重复已记录的内容；5.完成后回复 NO_REPLY' \
+    --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。规则：1.先用 sessions_list 查看当前活跃 session；2.再用 memory_search 搜索最近的对话内容（搜"今天"、最近话题关键词等），这能覆盖已被 /new 关闭的历史 session；3.没有新的有意义内容（<2条用户消息）直接回复 NO_REPLY；4.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；5.不要重复已记录的内容（先读 memory/YYYY-MM-DD.md 检查）；6.完成后回复 NO_REPLY' \
     > /dev/null 2>&1
   echo "  ✅ memory-hourly (L1: every 3h during daytime)"
 
@@ -124,7 +124,7 @@ else
     --model "$DAILY_MODEL" \
     --timeout-seconds 300 \
     --no-deliver \
-    --message '你是每日记忆蒸馏 agent。将今天所有 session 对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天所有 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；4.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；5.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；6.完成后回复 NO_REPLY' \
+    --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天活跃的 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.额外步骤：用 memory_search 搜索今天的关键词（如日期、项目名等），捕获已被 /new 关闭的历史 session 中的内容；4.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；5.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；6.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；7.完成后回复 NO_REPLY' \
     > /dev/null 2>&1
   echo "  ✅ memory-daily  (L2: every night at 23:00)"
 

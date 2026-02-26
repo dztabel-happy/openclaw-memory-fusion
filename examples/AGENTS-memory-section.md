@@ -31,6 +31,16 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - **Weekly Tidy**（周日 22 点）：聚合本周，精简 MEMORY.md，写周摘要
 
 你不需要担心记忆丢失——cron 会自动兜底。但对话中遇到重要信息，仍然建议立即写入。
+
+### ⚠️ /new 前必须 Flush 记忆！
+
+`/new` 会重置 session，之后 cron job 通过 `sessions_list` 看不到旧 session 的内容。所以：
+
+1. **用户说 `/new` 之前**，主动将当前 session 的重要内容写入 `memory/YYYY-MM-DD.md`
+2. 不需要用户提醒，检测到 `/new` 意图就自动 flush
+3. 如果来不及（用户直接发了 `/new`），cron 会通过 `memory_search` 搜索 QMD 索引补救，但可能不完整
+4. **主动 flush > 被动补救**
+
 - Write significant events, thoughts, decisions, opinions, lessons learned
 - This is your curated memory — the distilled essence, not raw logs
 - Over time, review your daily files and update MEMORY.md with what's worth keeping
