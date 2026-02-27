@@ -117,6 +117,18 @@ Cron 依赖 LLM API，断网时会失败。但设计上是**自愈的**：
 
 ### 1. 安装 QMD
 
+> ⚠️ **重要**：推荐使用 npm 安装而非 bun，因为 Bun 内置 SQLite 不支持加载 sqlite-vec 扩展，会导致向量 embed 失败。
+
+```bash
+# 推荐：使用 npm 安装（Node.js + better-sqlite3 支持扩展加载）
+npm install -g @tobilu/qmd
+
+# 验证
+qmd --help
+```
+
+如果必须用 bun（向量 embed 会失败，但 BM25 搜索正常）：
+
 ```bash
 # 安装
 bun install -g https://github.com/tobi/qmd
@@ -132,7 +144,25 @@ chmod +x ~/.bun/bin/qmd
 qmd --help
 ```
 
-### 2. 配置 QMD 后端
+### 2. 初始化 QMD 索引（必做）
+
+> ⚠️ **关键步骤**：OpenClaw 配置 `includeDefaultMemory: true` 不会自动创建 QMD collection，必须手动初始化。
+
+```bash
+cd ~/.openclaw/workspace
+
+# 创建 collection（索引所有 md 文件）
+qmd collection add .
+
+# 生成向量嵌入（可选，BM25 搜索已可用）
+qmd embed
+
+# 验证
+qmd status
+# 应显示: Total: N files indexed, Vectors: M embedded
+```
+
+### 3. 配置 QMD 后端
 
 在 `~/.openclaw/openclaw.json` 中添加 `memory` 配置：
 
@@ -143,7 +173,7 @@ qmd --help
     "backend": "qmd",
     "citations": "auto",
     "qmd": {
-      "command": "/path/to/qmd",          // qmd 二进制路径
+      "command": "/Users/abel/.npm-global/bin/qmd",  // npm 安装的 qmd 路径
       "includeDefaultMemory": true,
       "searchMode": "search",
       "update": {
@@ -158,7 +188,7 @@ qmd --help
       },
       "sessions": {
         "enabled": true,                   // 索引 session 对话记录
-        "retentionDays": 30
+        "retentionDays": 30                // ⚠️ 重要：保留 30 天，0 会立即过期
       },
       "scope": {
         "default": "deny",

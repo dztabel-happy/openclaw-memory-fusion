@@ -32,35 +32,49 @@ echo "Weekly model:  $WEEKLY_MODEL"
 echo "Workspace:     $WORKSPACE"
 echo ""
 
-# Step 1: 检查 QMD
+# Step 1: 检查并安装 QMD
 echo "📦 Step 1: Checking QMD..."
-if command -v qmd &> /dev/null; then
-  echo "  ✅ QMD found: $(which qmd)"
+
+# 优先检查 npm 安装的 qmd（支持向量 embed）
+if [ -f "$HOME/.npm-global/bin/qmd" ]; then
+  echo "  ✅ QMD found (npm): $HOME/.npm-global/bin/qmd"
+  export PATH="$HOME/.npm-global/bin:$PATH"
+elif command -v qmd &> /dev/null; then
+  echo "  ⚠️  QMD found (system): $(which qmd)"
+  echo "     注意: 如果后续 qmd embed 失败，请改用 npm 安装"
 else
-  echo "  ⚠️  QMD not found. Installing via bun..."
-  if ! command -v bun &> /dev/null; then
-    echo "  ❌ bun not found. Please install bun first: https://bun.sh"
+  echo "  ⚠️  QMD not found."
+  echo "  🔧 Installing via npm (推荐，支持向量 embed)..."
+  if ! command -v npm &> /dev/null; then
+    echo "  ❌ npm not found. Please install Node.js first: https://nodejs.org"
     exit 1
   fi
-  bun install -g https://github.com/tobi/qmd
-  # 创建 wrapper（如果全局 bin 没链接）
-  if ! command -v qmd &> /dev/null; then
-    QMD_SRC="$HOME/.bun/install/global/node_modules/@tobilu/qmd/src/qmd.ts"
-    if [ -f "$QMD_SRC" ]; then
-      mkdir -p "$HOME/.bun/bin"
-      cat > "$HOME/.bun/bin/qmd" << EOF
-#!/bin/bash
-exec bun "$QMD_SRC" "\$@"
-EOF
-      chmod +x "$HOME/.bun/bin/qmd"
-      echo "  ✅ QMD wrapper created at ~/.bun/bin/qmd"
-      echo "  ⚠️  Add to PATH: export PATH=\"\$HOME/.bun/bin:\$PATH\""
-    else
-      echo "  ❌ QMD install failed. Please install manually."
-      exit 1
-    fi
+  npm install -g @tobilu/qmd
+  if [ -f "$HOME/.npm-global/bin/qmd" ]; then
+    echo "  ✅ QMD installed via npm"
+    export PATH="$HOME/.npm-global/bin:$PATH"
+  else
+    echo "  ❌ QMD install failed. Please install manually."
+    exit 1
   fi
 fi
+echo ""
+
+# Step 1.5: 初始化 QMD 索引（关键步骤）
+echo "🔍 Step 1.5: Initializing QMD index..."
+cd "$WORKSPACE"
+if qmd status 2>/dev/null | grep -q "0 files indexed"; then
+  echo "  📂 Creating collection..."
+  qmd collection add . 2>/dev/null || true
+  echo "  🔢 Generating embeddings (可选，需几秒钟)..."
+  qmd embed 2>/dev/null || echo "     ⚠️  embed 失败，继续... (BM25 搜索仍可用)"
+else
+  echo "  ✅ QMD index already exists"
+fi
+QMD_STATUS=$(qmd status 2>/dev/null)
+FILES=$(echo "$QMD_STATUS" | grep "Total:" | awk '{print $2}')
+VECS=$(echo "$QMD_STATUS" | grep "Vectors:" | awk '{print $2}')
+echo "     索引状态: $FILES files, $VECS vectors"
 echo ""
 
 # Step 2: 创建目录结构
@@ -151,8 +165,22 @@ openclaw cron list 2>/dev/null | grep "memory-" || echo "  (no memory cron jobs 
 echo ""
 echo "🎉 Setup complete!"
 echo ""
-echo "Next steps:"
-echo "  1. Add memory config to ~/.openclaw/openclaw.json (see examples/)"
-echo "  2. Merge AGENTS-memory-section.md into your AGENTS.md"
-echo "  3. Run: openclaw gateway restart"
-echo "  4. Wait for first hourly sync to verify everything works"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "⚠️  关键步骤（必须完成，否则记忆系统无效）："
+echo ""
+echo "  1. 添加 memory 配置到 ~/.openclaw/openclaw.json"
+echo "     → 复制 examples/openclaw-memory-config.json"
+echo "     → 重点检查: retentionDays 必须为 30（不是 0！）"
+echo "     → qmd 命令路径使用 npm 版: /Users/abel/.npm-global/bin/qmd"
+echo ""
+echo "  2. 合并 AGENTS-memory-section.md 到你的 AGENTS.md"
+echo ""
+echo "  3. 重启 gateway 使配置生效"
+echo "     → openclaw gateway restart"
+echo ""
+echo "  4. 验证 QMD 索引正常"
+echo "     → qmd status"
+echo "     → 应显示: Total: N files indexed, Vectors: M embedded"
+echo ""
+echo "详细文档: https://github.com/dztabel-happy/openclaw-memory-fusion"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
