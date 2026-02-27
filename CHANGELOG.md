@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.4.0] - 2026-02-27
+
+### 优化：归档 Session 直读 + Session-ID 真幂等
+
+#### 背景
+
+小涛发现 OpenClaw `/new` 的完整生命周期：
+1. 产生：每次消息 append 到 `~/.openclaw/agents/<agent>/sessions/<sessionId>.jsonl`
+2. `/new` 时：旧文件重命名为 `<sessionId>.jsonl.reset.<timestamp>`（归档，数据完整保留）
+3. 新 session：生成新 sessionId，写新 `.jsonl`
+
+这意味着归档 session 的位置是**确定的**，可以直接读取，不需要依赖 QMD 索引间接搜索。
+
+#### 改进
+
+1. **Hourly/Daily 数据源升级**
+   - 新增归档 session 直读：扫描 `sessions/*.reset.*` 文件，按时间筛选近期归档
+   - `memory_search` 从"主要兜底手段"降级为"最后保险"（仅 Daily 保留）
+   - 数据源更确定、可靠、完整
+
+2. **Session-ID 真幂等**
+   - 之前：靠"检查 md 文件已有内容避免重复"（内容级去重，不可靠）
+   - 现在：在 `memory/YYYY-MM-DD.md` 头部用 HTML 注释维护已处理 ID 列表
+   - 格式：`<!-- processed: abc123, def456 -->`
+   - Hourly 和 Daily 共享同一去重列表，彻底避免重复处理
+
+3. **QMD 安装文档修正**
+   - 之前：说 "Bun 内置 SQLite 不支持 sqlite-vec 扩展"
+   - 实际：QMD 源码已做跨运行时兼容（`db.ts` 中 bun 用 `bun:sqlite` + `loadExtension`，Node.js 用 `better-sqlite3`）
+   - 真正原因：`bun install -g` 从 git 安装拿到的是未编译 TypeScript 源码（无 `dist/`），需手动构建；另外 macOS 自带 SQLite 不支持扩展，需 `brew install sqlite`
+   - npm registry 的包是预编译好的，开箱即用
+
+
 ## [0.3.0] - 2026-02-27
 
 ### 问题（严重 - 导致三层记忆系统完全失效）

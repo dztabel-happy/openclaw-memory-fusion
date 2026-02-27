@@ -63,7 +63,13 @@ OpenClaw 官方记忆系统有一个核心短板：**记忆写入完全依赖模
 
 ### 1. Session-ID 幂等
 
-每次 cron 运行时，会检查已处理的 session，避免重复蒸馏同一段对话。
+每次 cron 运行时，在 `memory/YYYY-MM-DD.md` 头部维护已处理的 session ID 列表（HTML 注释格式），跳过已处理的 session，实现真正的 ID 级去重：
+
+```markdown
+<!-- processed: abc123, def456, ghi789 -->
+# 2026-02-27 记忆日志
+...
+```
 
 ### 2. 信号过滤
 
@@ -92,13 +98,20 @@ workspace/
 │           └── 2026-02-18.md
 ```
 
-### 5. `/new` Session 丢失兜底
+### 5. `/new` Session 归档直读
 
-OpenClaw 的 `sessions_list` 只能看到**当前活跃的 session**。用户执行 `/new` 后旧 session 关闭，cron 就看不到了。
+OpenClaw 的 `sessions_list` 只能看到**当前活跃的 session**。用户执行 `/new` 后旧 session 关闭，`sessions_list` 看不到了。
 
-**双保险方案**：
+但 `/new` 不会删除数据——旧 session 文件会被重命名为归档格式：
+
+```
+~/.openclaw/agents/<agent>/sessions/<sessionId>.jsonl.reset.<timestamp>
+```
+
+**三重保障方案**：
 - **主动 flush**：AGENTS.md 规则要求 agent 检测到 `/new` 意图时，立即将重要内容写入 `memory/YYYY-MM-DD.md`
-- **被动兜底**：Hourly/Daily cron prompt 中加入 `memory_search` 步骤，从 QMD 索引中搜索已关闭 session 的内容（QMD 索引是持久的，不受 session 生命周期影响）
+- **归档直读**（新增）：Hourly/Daily cron 直接扫描 `sessions/` 目录下的 `.reset.*` 归档文件，按时间戳筛选近期归档，读取 jsonl 内容提取记忆。数据源确定、可靠、完整，不依赖 QMD 索引是否及时更新
+- **QMD 兜底**：如果归档文件已被清理，仍可通过 `memory_search` 从 QMD 索引中搜索（QMD 索引是持久的）
 
 ### 6. 断网容错
 
@@ -117,28 +130,33 @@ Cron 依赖 LLM API，断网时会失败。但设计上是**自愈的**：
 
 ### 1. 安装 QMD
 
-> ⚠️ **重要**：推荐使用 npm 安装而非 bun，因为 Bun 内置 SQLite 不支持加载 sqlite-vec 扩展，会导致向量 embed 失败。
+> ⚠️ **推荐使用 npm 安装**。虽然 QMD 源码已做了跨运行时兼容（bun 下用 `bun:sqlite`，Node.js 下用 `better-sqlite3`，两者都支持 sqlite-vec 扩展），但 `bun install -g` 从 git 安装时拿到的是**未编译的 TypeScript 源码**（没有 `dist/` 目录），需要手动构建才能运行。而 npm registry 的包是**预编译好的**，开箱即用。
+>
+> 此外，macOS 自带的 SQLite 不支持扩展加载，bun 环境下需额外配置 `Database.setCustomSQLite()` 指向 Homebrew 安装的 SQLite，增加了复杂度。
 
 ```bash
-# 推荐：使用 npm 安装（Node.js + better-sqlite3 支持扩展加载）
+# 推荐：使用 npm 安装（预编译，开箱即用）
 npm install -g @tobilu/qmd
 
 # 验证
 qmd --help
 ```
 
-如果必须用 bun（向量 embed 会失败，但 BM25 搜索正常）：
+如果必须用 bun（需要额外构建步骤）：
 
 ```bash
-# 安装
+# 安装源码
 bun install -g https://github.com/tobi/qmd
 
-# 如果 bun 全局 bin 不在 PATH 中，创建 wrapper
+# ⚠️ bun 全局安装的是 TypeScript 源码，需要创建 wrapper 用 bun 直接执行 .ts
 cat > ~/.bun/bin/qmd << 'EOF'
 #!/bin/bash
 exec bun ~/.bun/install/global/node_modules/@tobilu/qmd/src/qmd.ts "$@"
 EOF
 chmod +x ~/.bun/bin/qmd
+
+# macOS 用户还需要安装 Homebrew SQLite 以支持扩展加载
+brew install sqlite
 
 # 验证
 qmd --help
@@ -220,7 +238,21 @@ openclaw cron add \
   --model "google/gemini-3-flash-preview" \
   --timeout-seconds 120 \
   --no-deliver \
-  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。规则：1.先用 sessions_list 查看当前活跃 session；2.再用 memory_search 搜索最近的对话内容（搜"今天"、最近话题关键词等），这能覆盖已被 /new 关闭的历史 session；3.没有新的有意义内容（<2条用户消息）直接回复 NO_REPLY；4.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；5.不要重复已记录的内容（先读 memory/YYYY-MM-DD.md 检查）；6.完成后回复 NO_REPLY'
+  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。
+
+数据源（按优先级）：
+1. 用 sessions_list 查看当前活跃 session
+2. 用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10，筛选最近几小时内新归档的文件（按文件修改时间判断）
+3. 对筛选出的归档文件，用 read 读取 jsonl 内容（每行是一条消息 JSON，提取 role 和 content 字段）
+
+处理规则：
+1. 先读 memory/YYYY-MM-DD.md（今天日期），解析第一行的 <!-- processed: id1, id2 --> 注释获取已处理的 session ID 列表
+2. 跳过已处理的 session ID（从文件名中提取 ID，即 .jsonl 前的 UUID 部分）
+3. 跳过无意义 session（<2条 role=user 的消息）
+4. 没有新的有意义内容直接回复 NO_REPLY
+5. 有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md，格式：## HH:MM 简短标题 换行 - 要点
+6. 更新文件第一行的 <!-- processed: ... --> 注释，加入本次处理的 session ID
+7. 完成后回复 NO_REPLY'
 
 # Layer 2: Daily Sync（每晚蒸馏）
 openclaw cron add \
@@ -232,7 +264,24 @@ openclaw cron add \
   --model "openrouter/minimax/minimax-m2.5" \
   --timeout-seconds 300 \
   --no-deliver \
-  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天活跃的 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.额外步骤：用 memory_search 搜索今天的关键词（如日期、项目名等），捕获已被 /new 关闭的历史 session 中的内容；4.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；5.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；6.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；7.完成后回复 NO_REPLY'
+  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。
+
+数据源（全量覆盖）：
+1. 用 sessions_list(activeMinutes=1440) 获取今天活跃的 session
+2. 用 exec 扫描今天的归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null，筛选今天日期的归档文件
+3. 对活跃 session 用 sessions_history 获取内容；对归档文件用 read 读取 jsonl
+4. QMD 兜底：用 memory_search 搜索今天的关键词，捕获可能遗漏的内容
+
+幂等性（Session-ID 去重）：
+1. 读 memory/YYYY-MM-DD.md 第一行的 <!-- processed: id1, id2 --> 注释
+2. 跳过已处理的 session ID
+3. 处理完后更新该注释
+
+蒸馏规则：
+1. 跳过无意义 session（<2条 role=user 的消息）
+2. 蒸馏为结构化格式写入 memory/YYYY-MM-DD.md：## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动
+3. 将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录
+4. 完成后回复 NO_REPLY'
 
 # Layer 3: Weekly Tidy（每周巩固）
 openclaw cron add \
@@ -336,9 +385,10 @@ openclaw cron edit <job-id> --disabled
 
 ### Q: 用户执行 /new 后，之前的对话会丢失吗？
 
-不会。双保险机制：
+不会。`/new` 只是将旧 session 文件重命名为 `<id>.jsonl.reset.<timestamp>` 归档格式，数据完整保留。三重保障机制：
 1. Agent 检测到 `/new` 意图时会主动将重要内容写入 `memory/YYYY-MM-DD.md`
-2. Cron job 通过 `memory_search` 搜索 QMD 索引，能覆盖已关闭的历史 session（`sessions_list` 只能看活跃 session，但 QMD 索引是持久的）
+2. Cron job 直接扫描 `sessions/` 目录下的 `.reset.*` 归档文件，读取 jsonl 提取记忆（数据源确定可靠）
+3. QMD 兜底：如果归档文件已被清理，仍可通过 `memory_search` 从持久的 QMD 索引中搜索
 
 ### Q: 断网/电脑关机时 cron 会丢数据吗？
 

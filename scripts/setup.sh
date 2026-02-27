@@ -35,16 +35,16 @@ echo ""
 # Step 1: 检查并安装 QMD
 echo "📦 Step 1: Checking QMD..."
 
-# 优先检查 npm 安装的 qmd（支持向量 embed）
+# 优先检查 npm 安装的 qmd（预编译，开箱即用）
 if [ -f "$HOME/.npm-global/bin/qmd" ]; then
   echo "  ✅ QMD found (npm): $HOME/.npm-global/bin/qmd"
   export PATH="$HOME/.npm-global/bin:$PATH"
 elif command -v qmd &> /dev/null; then
   echo "  ⚠️  QMD found (system): $(which qmd)"
-  echo "     注意: 如果后续 qmd embed 失败，请改用 npm 安装"
+  echo "     注意: 推荐使用 npm 安装（预编译版本，bun 安装需额外构建步骤）"
 else
   echo "  ⚠️  QMD not found."
-  echo "  🔧 Installing via npm (推荐，支持向量 embed)..."
+  echo "  🔧 Installing via npm (推荐，预编译开箱即用)..."
   if ! command -v npm &> /dev/null; then
     echo "  ❌ npm not found. Please install Node.js first: https://nodejs.org"
     exit 1
@@ -124,7 +124,7 @@ else
     --model "$HOURLY_MODEL" \
     --timeout-seconds 120 \
     --no-deliver \
-    --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。规则：1.先用 sessions_list 查看当前活跃 session；2.再用 memory_search 搜索最近的对话内容（搜"今天"、最近话题关键词等），这能覆盖已被 /new 关闭的历史 session；3.没有新的有意义内容（<2条用户消息）直接回复 NO_REPLY；4.有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期），格式：## HH:MM 简短标题 换行 - 要点；5.不要重复已记录的内容（先读 memory/YYYY-MM-DD.md 检查）；6.完成后回复 NO_REPLY' \
+    --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。数据源：1.用 sessions_list 查看当前活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10，筛选最近几小时内新归档的文件；3.对归档文件用 read 读取 jsonl 内容。处理规则：1.先读 memory/YYYY-MM-DD.md，解析第一行 <!-- processed: id1, id2 --> 获取已处理 session ID；2.跳过已处理的 session ID（文件名中 .jsonl 前的 UUID）；3.跳过无意义 session（<2条 role=user 消息）；4.无新内容回复 NO_REPLY；5.有新内容 append 到 memory/YYYY-MM-DD.md，格式：## HH:MM 简短标题 换行 - 要点；6.更新第一行 <!-- processed: ... --> 加入本次处理的 ID；7.完成后回复 NO_REPLY' \
     > /dev/null 2>&1
   echo "  ✅ memory-hourly (L1: every 3h during daytime)"
 
@@ -138,7 +138,7 @@ else
     --model "$DAILY_MODEL" \
     --timeout-seconds 300 \
     --no-deliver \
-    --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。步骤：1.用 sessions_list(activeMinutes=1440) 获取今天活跃的 session；2.对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容；3.额外步骤：用 memory_search 搜索今天的关键词（如日期、项目名等），捕获已被 /new 关闭的历史 session 中的内容；4.幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session；5.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；6.将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录；7.完成后回复 NO_REPLY' \
+    --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。数据源：1.用 sessions_list(activeMinutes=1440) 获取今天活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null，筛选今天的归档文件；3.对活跃 session 用 sessions_history，对归档文件用 read 读取 jsonl；4.QMD 兜底：用 memory_search 搜索今天关键词。幂等性：1.读 memory/YYYY-MM-DD.md 第一行 <!-- processed: id1, id2 --> 获取已处理 ID；2.跳过已处理 session ID；3.处理完更新注释。蒸馏规则：1.跳过无意义 session（<2条 role=user 消息）；2.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；3.将超过 7 天的 daily log 移到 memory/archive/YYYY/；4.完成后回复 NO_REPLY' \
     > /dev/null 2>&1
   echo "  ✅ memory-daily  (L2: every night at 23:00)"
 
@@ -171,7 +171,7 @@ echo ""
 echo "  1. 添加 memory 配置到 ~/.openclaw/openclaw.json"
 echo "     → 复制 examples/openclaw-memory-config.json"
 echo "     → 重点检查: retentionDays 必须为 30（不是 0！）"
-echo "     → qmd 命令路径使用 npm 版: /Users/abel/.npm-global/bin/qmd"
+echo "     → qmd 命令路径使用 npm 版（预编译）: $(which qmd 2>/dev/null || echo '/Users/abel/.npm-global/bin/qmd')"
 echo ""
 echo "  2. 合并 AGENTS-memory-section.md 到你的 AGENTS.md"
 echo ""

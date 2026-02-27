@@ -4,52 +4,81 @@
 
 ## Layer 1: Hourly Micro-Sync
 
-**目标**：安全网，确保重要内容不丢失。
+**目标**：安全网，确保重要内容不丢失。覆盖活跃 session 和已被 `/new` 关闭的归档 session。
 
 ```
-你是记忆微同步 agent。检查最近 session 是否有新的有价值内容。
+你是记忆微同步 agent。检查最近是否有新的有价值内容。
 
-规则：
-1. 用 sessions_list 查看最近活跃 session
-2. 没有新的有意义对话（<2条用户消息）直接回复 NO_REPLY
-3. 有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md（今天日期）
+数据源（按优先级）：
+1. 用 sessions_list 查看当前活跃 session
+2. 用 exec 扫描归档 session：
+   ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10
+   筛选最近几小时内新归档的文件（按文件修改时间判断）
+3. 对筛选出的归档文件，用 read 读取 jsonl 内容
+   （每行是一条消息 JSON，提取 role 和 content 字段）
+
+处理规则：
+1. 先读 memory/YYYY-MM-DD.md（今天日期），解析第一行的
+   <!-- processed: id1, id2 --> 注释获取已处理的 session ID 列表
+2. 跳过已处理的 session ID
+   （从文件名中提取 ID，即 .jsonl 前的 UUID 部分）
+3. 跳过无意义 session（<2条 role=user 的消息）
+4. 没有新的有意义内容直接回复 NO_REPLY
+5. 有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md
    格式：## HH:MM 简短标题
          - 要点1
          - 要点2
-4. 不要重复已记录的内容（检查文件已有内容避免重复）
-5. 完成后回复 NO_REPLY
+6. 更新文件第一行的 <!-- processed: ... --> 注释，
+   加入本次处理的 session ID
+7. 完成后回复 NO_REPLY
 ```
 
 **设计要点**：
+- **归档直读**：直接扫描 `.reset.*` 文件，不再依赖 `memory_search` 做兜底。数据源确定、可靠、完整
+- **Session-ID 幂等**：在 md 文件头部用 HTML 注释维护已处理 ID 列表，实现 ID 级去重而非内容级去重
 - "没有新的有意义对话直接 NO_REPLY" → 大多数执行零成本
 - "<2条用户消息" → 信号过滤，跳过系统消息/误触
-- "检查文件已有内容避免重复" → 幂等性保障
 - 用最便宜的模型（如 gemini-flash），因为大多数时候只是检查然后退出
 
 ## Layer 2: Daily Sync
 
-**目标**：将零散的对话蒸馏为结构化日志。
+**目标**：将零散的对话蒸馏为结构化日志。全量覆盖今天的活跃和归档 session。
 
 ```
-你是每日记忆蒸馏 agent。将今天所有 session 对话蒸馏为结构化日志。
+你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。
 
-步骤：
-1. 用 sessions_list(activeMinutes=1440) 获取今天所有 session
-2. 对每个有意义的 session（>=2条用户消息），用 sessions_history 获取内容
-3. 幂等性：检查 memory/YYYY-MM-DD.md 已有内容，跳过已处理的 session
-4. 蒸馏为结构化格式写入 memory/YYYY-MM-DD.md：
+数据源（全量覆盖）：
+1. 用 sessions_list(activeMinutes=1440) 获取今天活跃的 session
+2. 用 exec 扫描今天的归档 session：
+   ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null
+   筛选今天日期的归档文件
+3. 对活跃 session 用 sessions_history 获取内容；
+   对归档文件用 read 读取 jsonl
+4. QMD 兜底：用 memory_search 搜索今天的关键词，
+   捕获可能遗漏的内容
+
+幂等性（Session-ID 去重）：
+1. 读 memory/YYYY-MM-DD.md 第一行的
+   <!-- processed: id1, id2 --> 注释
+2. 跳过已处理的 session ID
+3. 处理完后更新该注释
+
+蒸馏规则：
+1. 跳过无意义 session（<2条 role=user 的消息）
+2. 蒸馏为结构化格式写入 memory/YYYY-MM-DD.md：
    ## 主题标题
    - 关键决策/结论
    - 重要信息/偏好
    - 待办/后续行动
-5. 将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录
-6. 完成后回复 NO_REPLY
+3. 将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录
+4. 完成后回复 NO_REPLY
 ```
 
 **设计要点**：
-- `activeMinutes=1440` = 24 小时，覆盖全天
+- **归档直读**：直接扫描 `.reset.*` 文件获取被 `/new` 关闭的 session，不再仅依赖 `memory_search` 兜底
+- **Session-ID 幂等**：HTML 注释维护已处理 ID 列表，与 Hourly 共享同一去重机制，避免 Hourly 和 Daily 重复处理
+- `activeMinutes=1440` = 24 小时，覆盖全天活跃 session
 - ">=2条用户消息" → 过滤无意义 session
-- "检查已有内容，跳过已处理" → 幂等性，hourly 已记录的不重复
 - "移动到 archive" → 自动清理，保持 memory/ 目录整洁
 - 用中等模型，需要理解对话内容做摘要
 
