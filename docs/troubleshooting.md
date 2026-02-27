@@ -26,18 +26,57 @@ source ~/.zshrc
 
 ### memory_search 返回空结果
 
-QMD 需要先索引文件。重启 gateway 后会自动 onBoot 索引：
+#### 原因 1：QMD 从未建索引
+
+OpenClaw 配置了 `includeDefaultMemory: true`，但**不会自动创建 QMD collection**。需要手动初始化：
 
 ```bash
+cd ~/.openclaw/workspace
+
+# 1. 创建 collection（索引所有 md 文件）
+qmd collection add .
+
+# 2. 生成向量嵌入（可选，BM25 搜索已可用）
+qmd embed
+
+# 3. 验证
+qmd status
+# 应显示: Total: N files indexed, Vectors: M embedded
+```
+
+#### 原因 2：向量 embed 失败（Bun SQLite 限制）
+
+**问题**：Bun 内置 SQLite 不支持 `loadExtension`，导致 sqlite-vec 扩展无法加载。
+
+**表现**：`qmd embed` 报错 "sqlite-vec is not available. Vector operations require a SQLite build with extension loading support."
+
+**解决**：使用 npm 版的 qmd（Node.js + better-sqlite3）：
+
+```bash
+# 安装 npm 版 qmd
+npm install -g @tobilu/qmd
+
+# 修改 openclaw.json 配置
+# 将 "command": "/Users/abel/.bun/bin/qmd" 改为：
+"command": "/Users/abel/.npm-global/bin/qmd"
+
+# 重启 gateway
 openclaw gateway restart
 ```
 
-或手动触发：
+#### 原因 3：session transcripts 未被索引
+
+检查 `retentionDays` 配置：
 
 ```bash
-qmd collection add memory ~/.openclaw/workspace/memory
-qmd collection add workspace ~/.openclaw/workspace
+# 检查当前值
+grep retentionDays ~/.openclaw/openclaw.json
+
+# 如果是 0，改为 30（保留 30 天）
+# "memory": { "qmd": { "sessions": { "retentionDays": 30 } } }
 ```
+
+**注意**：`0` 表示"立即过期"，不是"永不过期"。
 
 ## Cron 相关
 

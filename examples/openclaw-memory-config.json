@@ -5,7 +5,7 @@
     "backend": "qmd",
     "citations": "auto",
     "qmd": {
-      "command": "/path/to/qmd",
+      "command": "/Users/abel/.npm-global/bin/qmd",
       "includeDefaultMemory": true,
       "searchMode": "search",
       "update": {
@@ -20,7 +20,7 @@
       },
       "sessions": {
         "enabled": true,
-        "retentionDays": 0
+        "retentionDays": 30
       },
       "scope": {
         "default": "deny",
