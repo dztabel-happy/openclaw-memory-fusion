@@ -155,3 +155,55 @@ ls ~/.openclaw/workspace/memory/
 1. 等周日 weekly cron 自动剪枝
 2. 或手动精简：移除过时信息，合并重复项
 3. 细节内容靠 QMD 语义搜索召回，不需要全放 MEMORY.md
+
+### Cron job 报 "LLM request timed out"
+
+**问题**：cron job 执行报超时，但模型和 timeout 配置跟其他正常运行的 job 相同。
+
+**排查步骤**：
+
+```bash
+# 查看详细错误
+openclaw cron list --json | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+for j in data.get('jobs',[]):
+    s = j.get('state',{})
+    if s.get('lastRunStatus') == 'error':
+        print(f\"{j['name']}: {s.get('lastError')}\")"
+```
+
+**常见根因：`sessions_list` 未限制范围**
+
+如果 cron prompt 中调用 `sessions_list` 没有指定 `activeMinutes` 参数，会返回**所有 session** 的数据，token 量可能极大，导致请求超时。
+
+**修复**：在 prompt 中指定合理的时间范围：
+
+```bash
+# Hourly 用 360 分钟（6 小时）
+sessions_list(activeMinutes=360)
+
+# Daily 用 1440 分钟（24 小时）
+sessions_list(activeMinutes=1440)
+```
+
+```bash
+# 修改 cron prompt
+openclaw cron edit <job-id> --message '新的 prompt 内容...'
+
+# 手动触发验证
+openclaw cron run <job-id>
+```
+
+**验证修复**：
+
+```bash
+openclaw cron list --json | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+for j in data.get('jobs',[]):
+    if j['name'] == 'memory-hourly':
+        s = j.get('state',{})
+        print(f\"status: {s.get('lastRunStatus')}\")
+        print(f\"consecutiveErrors: {s.get('consecutiveErrors')}\")"
+```

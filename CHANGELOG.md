@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.5.0] - 2026-02-27
+
+### 修复：Hourly Cron 连续超时
+
+#### 问题
+- memory-hourly 连续 5 次执行失败，错误均为 `LLM request timed out`（54 秒超时）
+- memory-daily 使用相同模型和 timeout 却正常运行
+
+#### 根因
+- Hourly prompt 中 `sessions_list` **未设置 `activeMinutes` 参数**，返回所有 session 数据量过大，token 爆炸超时
+- Daily prompt 设置了 `sessions_list(activeMinutes=1440)` 所以没问题
+
+#### 修复
+- Hourly prompt 的 `sessions_list` 加上 `activeMinutes=360`（6 小时窗口）
+- 修复后手动测试通过：64 秒完成，consecutiveErrors 归零
+
+#### 其他变更
+- 三个 cron job 模型统一为 `anyrouter/claude-opus-4-6`（之前推荐 hourly 用便宜模型，实际统一更稳定）
+- `memory.qmd.command` 确认指向 npm 版 (`~/.npm-global/bin/qmd`)，向量 embed 正常
+
+### 经验教训
+- `sessions_list` 不加范围限制会返回海量数据，在 cron prompt 中务必指定 `activeMinutes`
+- 排查 cron 失败时先看 `openclaw cron list --json` 的 `state.lastError` 字段
+
 ## [0.4.0] - 2026-02-27
 
 ### 优化：归档 Session 直读 + Session-ID 真幂等

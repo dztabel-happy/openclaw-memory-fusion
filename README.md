@@ -49,9 +49,9 @@ OpenClaw 官方记忆系统有一个核心短板：**记忆写入完全依赖模
 
 | 层级 | 名称 | 频率 | 模型 | 职责 |
 |---|---|---|---|---|
-| L1 | Hourly Micro-Sync | 白天 5 次（10/13/16/19/22 点） | 便宜快模型 | 轻量检查新活动，有则 append，无事退出 |
-| L2 | Daily Sync | 每晚 23 点 | 中等模型 | 蒸馏全天 session 为结构化日志，归档旧文件 |
-| L3 | Weekly Tidy | 每周日 22 点 | 强模型 | 聚合本周，精简 MEMORY.md，写周摘要 |
+| L1 | Hourly Micro-Sync | 白天 5 次（10/13/16/19/22 点） | 与主模型相同 | 轻量检查新活动，有则 append，无事退出 |
+| L2 | Daily Sync | 每晚 23 点 | 与主模型相同 | 蒸馏全天 session 为结构化日志，归档旧文件 |
+| L3 | Weekly Tidy | 每周日 22 点 | 与主模型相同 | 聚合本周，精简 MEMORY.md，写周摘要 |
 
 ### 为什么分三层？
 
@@ -125,7 +125,7 @@ Cron 依赖 LLM API，断网时会失败。但设计上是**自愈的**：
 ### 前置条件
 
 - [OpenClaw](https://github.com/openclaw/openclaw) 已安装并运行
-- [QMD](https://github.com/tobi/qmd) 已安装（`bun install -g https://github.com/tobi/qmd`）
+- [QMD](https://github.com/tobi/qmd) 已安装（`npm install -g @tobilu/qmd`，推荐 npm 版）
 - 至少一个可用的 LLM provider
 
 ### 1. 安装 QMD
@@ -229,30 +229,17 @@ mkdir -p ~/.openclaw/workspace/memory/{weekly,archive/$(date +%Y)}
 
 ```bash
 # Layer 1: Hourly Micro-Sync（白天轻量检查）
+# ⚠️ sessions_list 必须加 activeMinutes，否则返回全量数据导致 token 爆炸超时
 openclaw cron add \
   --name "memory-hourly" \
   --cron "0 10,13,16,19,22 * * *" \
   --tz "Asia/Shanghai" \
   --session isolated \
   --agent main \
-  --model "google/gemini-3-flash-preview" \
-  --timeout-seconds 120 \
+  --model "your-model-here" \
+  --timeout-seconds 300 \
   --no-deliver \
-  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。
-
-数据源（按优先级）：
-1. 用 sessions_list 查看当前活跃 session
-2. 用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10，筛选最近几小时内新归档的文件（按文件修改时间判断）
-3. 对筛选出的归档文件，用 read 读取 jsonl 内容（每行是一条消息 JSON，提取 role 和 content 字段）
-
-处理规则：
-1. 先读 memory/YYYY-MM-DD.md（今天日期），解析第一行的 <!-- processed: id1, id2 --> 注释获取已处理的 session ID 列表
-2. 跳过已处理的 session ID（从文件名中提取 ID，即 .jsonl 前的 UUID 部分）
-3. 跳过无意义 session（<2条 role=user 的消息）
-4. 没有新的有意义内容直接回复 NO_REPLY
-5. 有新内容则提取关键信息 append 到 memory/YYYY-MM-DD.md，格式：## HH:MM 简短标题 换行 - 要点
-6. 更新文件第一行的 <!-- processed: ... --> 注释，加入本次处理的 session ID
-7. 完成后回复 NO_REPLY'
+  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。数据源：1.用 sessions_list(activeMinutes=360) 查看最近活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10，筛选最近几小时内新归档的文件；3.对归档文件用 read 读取 jsonl 内容。处理规则：1.先读 memory/YYYY-MM-DD.md，解析第一行 <!-- processed: id1, id2 --> 获取已处理 session ID；2.跳过已处理的 session ID（文件名中 .jsonl 前的 UUID）；3.跳过无意义 session（<2条 role=user 消息）；4.无新内容回复 NO_REPLY；5.有新内容 append 到 memory/YYYY-MM-DD.md，格式：## HH:MM 简短标题 换行 - 要点；6.更新第一行 <!-- processed: ... --> 加入本次处理的 ID；7.完成后回复 NO_REPLY'
 
 # Layer 2: Daily Sync（每晚蒸馏）
 openclaw cron add \
@@ -261,27 +248,10 @@ openclaw cron add \
   --tz "Asia/Shanghai" \
   --session isolated \
   --agent main \
-  --model "openrouter/minimax/minimax-m2.5" \
+  --model "your-model-here" \
   --timeout-seconds 300 \
   --no-deliver \
-  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。
-
-数据源（全量覆盖）：
-1. 用 sessions_list(activeMinutes=1440) 获取今天活跃的 session
-2. 用 exec 扫描今天的归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null，筛选今天日期的归档文件
-3. 对活跃 session 用 sessions_history 获取内容；对归档文件用 read 读取 jsonl
-4. QMD 兜底：用 memory_search 搜索今天的关键词，捕获可能遗漏的内容
-
-幂等性（Session-ID 去重）：
-1. 读 memory/YYYY-MM-DD.md 第一行的 <!-- processed: id1, id2 --> 注释
-2. 跳过已处理的 session ID
-3. 处理完后更新该注释
-
-蒸馏规则：
-1. 跳过无意义 session（<2条 role=user 的消息）
-2. 蒸馏为结构化格式写入 memory/YYYY-MM-DD.md：## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动
-3. 将超过 7 天的 daily log 移动到 memory/archive/YYYY/ 目录
-4. 完成后回复 NO_REPLY'
+  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。数据源：1.用 sessions_list(activeMinutes=1440) 获取今天活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null，筛选今天的归档文件；3.对活跃 session 用 sessions_history，对归档文件用 read 读取 jsonl；4.QMD 兜底：用 memory_search 搜索今天关键词。幂等性：1.读 memory/YYYY-MM-DD.md 第一行 <!-- processed: id1, id2 --> 获取已处理 ID；2.跳过已处理 session ID；3.处理完更新注释。蒸馏规则：1.跳过无意义 session（<2条 role=user 消息）；2.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；3.将超过 7 天的 daily log 移到 memory/archive/YYYY/；4.完成后回复 NO_REPLY'
 
 # Layer 3: Weekly Tidy（每周巩固）
 openclaw cron add \
@@ -290,7 +260,7 @@ openclaw cron add \
   --tz "Asia/Shanghai" \
   --session isolated \
   --agent main \
-  --model "anyrouter/claude-opus-4-6" \
+  --model "your-model-here" \
   --timeout-seconds 600 \
   --no-deliver \
   --message '你是每周记忆巩固 agent。聚合本周记忆，精简 MEMORY.md。步骤：1.读取本周所有 memory/YYYY-MM-DD.md 日志；2.读取当前 MEMORY.md；3.提取本周新的偏好、决策、项目状态、技术配置、人物关系、重要教训；4.更新 MEMORY.md：合并新信息到对应分类，剪枝过时/已失效信息，保持精简（软上限约200行），更新底部最后更新时间戳；5.将本周日志压缩摘要写入 memory/weekly/YYYY-WXX.md（XX=周数）；6.完成后回复 NO_REPLY'
@@ -317,9 +287,11 @@ Cron job 的模型可以随时替换。推荐原则：
 
 | 层级 | 推荐 | 说明 |
 |---|---|---|
-| Hourly | 最便宜的模型 | 大多数时候"无事退出"，几乎不花钱 |
-| Daily | 中等模型 | 需要理解对话内容并做结构化摘要 |
-| Weekly | 最好的模型 | 需要理解全局、做信息精炼和剪枝决策 |
+| Hourly | 与主模型相同即可 | 大多数时候"无事退出"，有事需要理解对话上下文 |
+| Daily | 与主模型相同即可 | 需要理解对话内容并做结构化摘要 |
+| Weekly | 与主模型相同或更强 | 需要理解全局、做信息精炼和剪枝决策 |
+
+> 💡 **实践经验**：之前尝试 hourly 用便宜模型（gemini-flash），但发现不够稳定。统一用主力模型反而更省心，因为 hourly 大多数时候"无事退出"消耗极少，真正有事时需要足够的理解能力。
 
 修改方法：
 
