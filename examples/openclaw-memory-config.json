@@ -5,7 +5,7 @@
     "backend": "qmd",
     "citations": "auto",
     "qmd": {
-      "command": "/Users/abel/.npm-global/bin/qmd",
+      "command": "<PATH_TO_QMD>",
       "includeDefaultMemory": true,
       "searchMode": "search",
       "update": {

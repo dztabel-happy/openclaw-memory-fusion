@@ -26,20 +26,20 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ### ⏰ 自动记忆系统（3 个 cron job 已配置）
 
-- **Hourly Micro-Sync**（10/13/16/19/22 点）：轻量检查新活动，有则 append
+- **Hourly Micro-Sync**（7/11/15/19/23 点）：轻量检查新活动，有则 append
 - **Daily Sync**（23 点）：蒸馏全天对话为结构化日志，归档旧文件
 - **Weekly Tidy**（周日 22 点）：聚合本周，精简 MEMORY.md，写周摘要
 
 你不需要担心记忆丢失——cron 会自动兜底。但对话中遇到重要信息，仍然建议立即写入。
 
-### ⚠️ /new 前必须 Flush 记忆！
+### /new 与记忆安全
 
-`/new` 会重置 session，之后 cron job 通过 `sessions_list` 看不到旧 session 的内容。所以：
+`/new` 会重置 session，但不会丢数据：旧 session 文件会变成 `*.jsonl.reset.*` 归档格式。  
+本方案的 cron job 不依赖 `sessions_list/sessions_history`，而是增量扫描会话文件（含 `.jsonl` + `.jsonl.reset.*`），所以 `/new` 不会让记忆系统漏数据。
 
-1. **用户说 `/new` 之前**，主动将当前 session 的重要内容写入 `memory/YYYY-MM-DD.md`
-2. 不需要用户提醒，检测到 `/new` 意图就自动 flush
-3. 如果来不及（用户直接发了 `/new`），cron 会通过 `memory_search` 搜索 QMD 索引补救，但可能不完整
-4. **主动 flush > 被动补救**
+实践建议：
+1. 重要决策/偏好/结论，仍建议“当场写入” `memory/YYYY-MM-DD.md`（更及时、更可靠）
+2. 细节与长尾内容可以依赖 cron 自动补写 + QMD 检索召回
 
 - Write significant events, thoughts, decisions, opinions, lessons learned
 - This is your curated memory — the distilled essence, not raw logs

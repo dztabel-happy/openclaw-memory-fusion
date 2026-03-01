@@ -2,3 +2,19 @@
 *.swp
 *.swo
 *~
+
+# Python
+__pycache__/
+*.pyc
+
+# Local venvs
+.venv/
+
+# Generated memory artifacts (workspace-local)
+memory/_state/
+memory/_state/*.json
+
+# Backups / temp files
+*.bak
+*.bak.*
+*.tmp

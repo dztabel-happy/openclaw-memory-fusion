@@ -49,7 +49,7 @@ OpenClaw 官方记忆系统有一个核心短板：**记忆写入完全依赖模
 
 | 层级 | 名称 | 频率 | 模型 | 职责 |
 |---|---|---|---|---|
-| L1 | Hourly Micro-Sync | 白天 5 次（10/13/16/19/22 点） | 与主模型相同 | 轻量检查新活动，有则 append，无事退出 |
+| L1 | Hourly Micro-Sync | 每天 5 次（7/11/15/19/23 点） | 与主模型相同 | 轻量检查新活动，有则 append，无事退出 |
 | L2 | Daily Sync | 每晚 23 点 | 与主模型相同 | 蒸馏全天 session 为结构化日志，归档旧文件 |
 | L3 | Weekly Tidy | 每周日 22 点 | 与主模型相同 | 聚合本周，精简 MEMORY.md，写周摘要 |
 
@@ -59,66 +59,67 @@ OpenClaw 官方记忆系统有一个核心短板：**记忆写入完全依赖模
 - **Daily** 做结构化：把零散的 hourly notes 和原始对话整理成可读日志
 - **Weekly** 做精炼：避免 MEMORY.md 无限膨胀，定期剪枝过时信息
 
-## 关键设计决策
+## 关键设计决策（2026-03-01）
 
-### 1. Session-ID 幂等
+### 1. Cron 不依赖 `sessions_list` / `sessions_history`
 
-每次 cron 运行时，在 `memory/YYYY-MM-DD.md` 头部维护已处理的 session ID 列表（HTML 注释格式），跳过已处理的 session，实现真正的 ID 级去重：
+隔离（isolated）cron 运行时可能看不到主会话树，用 `sessions_list` / `sessions_history` 会漏数据或直接失败。  
+因此本方案把**会话文件**作为唯一事实来源（source of truth）。
 
-```markdown
-<!-- processed: abc123, def456, ghi789 -->
-# 2026-02-27 记忆日志
-...
-```
+### 2. 增量游标：按文件 byte offset 扫描（不丢不重）
 
-### 2. 信号过滤
+扫描目录：`~/.openclaw/agents/main/sessions/` 下的：
+- `*.jsonl`（活跃会话持续 append）
+- `*.jsonl.reset.*`（`/new` 后归档会话）
 
-少于 2 条用户消息的 session 直接跳过（系统消息、误触等不值得记录）。
+通过 `scripts/scan_sessions_incremental.py` 维护状态文件（`memory/_state/scan_sessions_*.json`）：
+- 每个文件单独记录 offset（byte offset）
+- **只推进到最后一个完整换行**，容忍最后一行半写（避免 JSON 半行）
+- 同一会话 append 新内容不会漏；漏跑一晚上也会在下一次补上
 
-### 3. MEMORY.md 软上限（~200 行）
+### 3. 防套娃（递归污染）
 
-- 不做硬限制（不会截断），但在 cron prompt 和 AGENTS.md 中强调保持精简
-- 核心偏好/决策优先，细节靠 QMD 语义搜索召回
-- 每周 cron 自动剪枝过时内容
+cron 会话本身也会写入 sessions 目录，如果不处理会被下一轮当成“新对话”再次总结。
 
-### 4. 分层存储
+新设计的保险：
+- cron prompt 第一行以 `[cron:` 开头（例如 `[cron:memory-hourly] ...`）
+- 扫描器忽略 cron 会话（heuristic：首条 user 消息以 `[cron:` 开头）
+- 扫描器忽略通知文本（`memory-<layer> ok` / `NO_REPLY`）与 `tool/system` 输出
+
+### 4. 只保留有价值信号（不记工具噪音）
+
+记忆提取只消费两类内容：
+- ✅ 用户消息（`role=user`）
+- ✅ 助手最终回复（`role=assistant` 的非 tool-call 消息）
+
+### 5. Telegram 群通知（运营面板）
+
+cron 的最终回复用于投递到一个专用 Telegram 群，统一格式：
+- 第一行：`memory-<layer> ok`
+- 第二行：小 stats（sessions/messages/truncated 等）
+- 后面：少量 bullet（最重要新增记忆点）
+
+### 6. 分层存储（含状态文件）
 
 ```
 workspace/
 ├── MEMORY.md                    # 长期精华（软上限 ~200 行）
 ├── memory/
-│   ├── 2026-02-24.md           # 今日日志
-│   ├── 2026-02-23.md           # 昨日日志
+│   ├── YYYY-MM-DD.md           # 每日日志（结构化）
+│   ├── _state/                 # 扫描游标（增量 offset）
+│   │   ├── scan_sessions_hourly.json
+│   │   └── scan_sessions_daily.json
 │   ├── weekly/
-│   │   ├── 2026-W08.md         # 第 8 周摘要
-│   │   └── 2026-W09.md
-│   └── archive/
-│       └── 2026/
-│           ├── 2026-02-17.md   # 归档（>7 天）
-│           └── 2026-02-18.md
+│   └── archive/YYYY/
+└── scripts/
+    ├── scan_sessions_incremental.py
+    └── patch-openai-sse-empty-data.sh
 ```
 
-### 5. `/new` Session 归档直读
+### 7. `/new` 与断网容错
 
-OpenClaw 的 `sessions_list` 只能看到**当前活跃的 session**。用户执行 `/new` 后旧 session 关闭，`sessions_list` 看不到了。
-
-但 `/new` 不会删除数据——旧 session 文件会被重命名为归档格式：
-
-```
-~/.openclaw/agents/<agent>/sessions/<sessionId>.jsonl.reset.<timestamp>
-```
-
-**三重保障方案**：
-- **主动 flush**：AGENTS.md 规则要求 agent 检测到 `/new` 意图时，立即将重要内容写入 `memory/YYYY-MM-DD.md`
-- **归档直读**（新增）：Hourly/Daily cron 直接扫描 `sessions/` 目录下的 `.reset.*` 归档文件，按时间戳筛选近期归档，读取 jsonl 内容提取记忆。数据源确定、可靠、完整，不依赖 QMD 索引是否及时更新
-- **QMD 兜底**：如果归档文件已被清理，仍可通过 `memory_search` 从 QMD 索引中搜索（QMD 索引是持久的）
-
-### 6. 断网容错
-
-Cron 依赖 LLM API，断网时会失败。但设计上是**自愈的**：
-- Hourly 检查"最近未处理的活动"，不是"最近 1 小时"
-- Daily 处理"今天所有未记录 session"，不是"最近 24 小时"
-- 漏跑几次不影响数据完整性，下次执行会补上
+- `/new` 不会丢数据：旧会话会重命名为 `*.jsonl.reset.*`，仍会被扫描器覆盖
+- 断网/关机漏跑是可恢复的：游标按 offset 前进，下次会补上 gap
 
 ## 快速开始
 
@@ -191,7 +192,7 @@ qmd status
     "backend": "qmd",
     "citations": "auto",
     "qmd": {
-      "command": "/Users/abel/.npm-global/bin/qmd",  // npm 安装的 qmd 路径
+      "command": "<PATH_TO_QMD>",                   // 例如：which qmd 的输出路径
       "includeDefaultMemory": true,
       "searchMode": "search",
       "update": {
@@ -219,51 +220,44 @@ qmd status
 }
 ```
 
-### 3. 创建目录结构
+### 3.1 配置 Telegram 群 allowlist（推荐）
 
-```bash
-mkdir -p ~/.openclaw/workspace/memory/{weekly,archive/$(date +%Y)}
+如果你希望 cron 的通知投递到一个专用 Telegram 群，建议开启 allowlist 并限制来源（避免群聊被其它 agent/任务刷屏）：
+
+```json5
+{
+  "channels": {
+    "telegram": {
+      "groupPolicy": "allowlist",
+      "groups": [
+        { "chatId": "<YOUR_TELEGRAM_CHAT_ID>", "name": "memory-group" }
+      ],
+      "groupAllowFrom": ["memory-hourly", "memory-daily", "memory-weekly"]
+    }
+  }
+}
 ```
 
-### 4. 添加 Cron Jobs
+> 注意：不要把真实 chatId 提交到任何仓库；用占位符即可。
+
+### 4. 创建目录结构
 
 ```bash
-# Layer 1: Hourly Micro-Sync（白天轻量检查）
-# ⚠️ sessions_list 必须加 activeMinutes，否则返回全量数据导致 token 爆炸超时
-openclaw cron add \
-  --name "memory-hourly" \
-  --cron "0 10,13,16,19,22 * * *" \
-  --tz "Asia/Shanghai" \
-  --session isolated \
-  --agent main \
-  --model "your-model-here" \
-  --timeout-seconds 300 \
-  --no-deliver \
-  --message '你是记忆微同步 agent。检查最近是否有新的有价值内容。数据源：1.用 sessions_list(activeMinutes=360) 查看最近活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null | head -10，筛选最近几小时内新归档的文件；3.对归档文件用 read 读取 jsonl 内容。处理规则：1.先读 memory/YYYY-MM-DD.md，解析第一行 <!-- processed: id1, id2 --> 获取已处理 session ID；2.跳过已处理的 session ID（文件名中 .jsonl 前的 UUID）；3.跳过无意义 session（<2条 role=user 消息）；4.无新内容回复 NO_REPLY；5.有新内容 append 到 memory/YYYY-MM-DD.md，格式：## HH:MM 简短标题 换行 - 要点；6.更新第一行 <!-- processed: ... --> 加入本次处理的 ID；7.完成后回复 NO_REPLY'
+mkdir -p ~/.openclaw/workspace/memory/{weekly,_state,archive/$(date +%Y)} ~/.openclaw/workspace/scripts
+```
 
-# Layer 2: Daily Sync（每晚蒸馏）
-openclaw cron add \
-  --name "memory-daily" \
-  --cron "0 23 * * *" \
-  --tz "Asia/Shanghai" \
-  --session isolated \
-  --agent main \
-  --model "your-model-here" \
-  --timeout-seconds 300 \
-  --no-deliver \
-  --message '你是每日记忆蒸馏 agent。将今天所有对话蒸馏为结构化日志。数据源：1.用 sessions_list(activeMinutes=1440) 获取今天活跃 session；2.用 exec 扫描归档 session：ls -lt ~/.openclaw/agents/main/sessions/*.reset.* 2>/dev/null，筛选今天的归档文件；3.对活跃 session 用 sessions_history，对归档文件用 read 读取 jsonl；4.QMD 兜底：用 memory_search 搜索今天关键词。幂等性：1.读 memory/YYYY-MM-DD.md 第一行 <!-- processed: id1, id2 --> 获取已处理 ID；2.跳过已处理 session ID；3.处理完更新注释。蒸馏规则：1.跳过无意义 session（<2条 role=user 消息）；2.蒸馏为结构化格式写入 memory/YYYY-MM-DD.md（## 主题标题 换行 - 关键决策/结论 - 重要信息/偏好 - 待办/后续行动）；3.将超过 7 天的 daily log 移到 memory/archive/YYYY/；4.完成后回复 NO_REPLY'
+### 5. 添加 Cron Jobs
 
-# Layer 3: Weekly Tidy（每周巩固）
-openclaw cron add \
-  --name "memory-weekly" \
-  --cron "0 22 * * 0" \
-  --tz "Asia/Shanghai" \
-  --session isolated \
-  --agent main \
-  --model "your-model-here" \
-  --timeout-seconds 600 \
-  --no-deliver \
-  --message '你是每周记忆巩固 agent。聚合本周记忆，精简 MEMORY.md。步骤：1.读取本周所有 memory/YYYY-MM-DD.md 日志；2.读取当前 MEMORY.md；3.提取本周新的偏好、决策、项目状态、技术配置、人物关系、重要教训；4.更新 MEMORY.md：合并新信息到对应分类，剪枝过时/已失效信息，保持精简（软上限约200行），更新底部最后更新时间戳；5.将本周日志压缩摘要写入 memory/weekly/YYYY-WXX.md（XX=周数）；6.完成后回复 NO_REPLY'
+```bash
+# 推荐：直接运行一键脚本（会安装/复制 helper scripts，并创建 3 个 cron jobs）
+bash scripts/setup.sh --tz Asia/Shanghai
+
+# 或手动添加（推荐参考 docs/cron-prompts.md 的最新 prompt 模板）
+# 关键点：
+# - prompt 第一行以 [cron:...] 开头（防套娃）
+# - 不使用 sessions_list/sessions_history
+# - 用 scan_sessions_incremental.py + memory/_state/*.json 做增量游标
+# - 最终回复用于投递 Telegram：第一行 memory-<layer> ok
 
 # 验证
 openclaw cron list
@@ -357,10 +351,23 @@ openclaw cron edit <job-id> --disabled
 
 ### Q: 用户执行 /new 后，之前的对话会丢失吗？
 
-不会。`/new` 只是将旧 session 文件重命名为 `<id>.jsonl.reset.<timestamp>` 归档格式，数据完整保留。三重保障机制：
-1. Agent 检测到 `/new` 意图时会主动将重要内容写入 `memory/YYYY-MM-DD.md`
-2. Cron job 直接扫描 `sessions/` 目录下的 `.reset.*` 归档文件，读取 jsonl 提取记忆（数据源确定可靠）
-3. QMD 兜底：如果归档文件已被清理，仍可通过 `memory_search` 从持久的 QMD 索引中搜索
+不会。`/new` 只是将旧 session 文件重命名为 `<id>.jsonl.reset.<timestamp>` 归档格式，数据完整保留。
+
+新方案的关键点是：cron 不再依赖 `sessions_list/sessions_history`，而是用扫描器同时覆盖：
+- `~/.openclaw/agents/main/sessions/*.jsonl`
+- `~/.openclaw/agents/main/sessions/*.jsonl.reset.*`
+
+因此 `/new` 不会“让 cron 看不到旧会话”。另外，如果你开启了 QMD 的 session transcripts 索引，即使将来本地 session 文件被清理，仍可通过检索召回细节。
+
+### Q: OpenAI Responses streaming 偶发崩溃（SSE 空 data）怎么办？
+
+偶发会出现 SSE 帧 `data:` 为空字符串（keepalive），导致 SDK 内部 `JSON.parse("")` 报错。
+
+使用本仓库提供的补丁脚本修复（升级依赖后可能需要重打）：
+
+```bash
+bash ~/.openclaw/workspace/scripts/patch-openai-sse-empty-data.sh
+```
 
 ### Q: 断网/电脑关机时 cron 会丢数据吗？
 

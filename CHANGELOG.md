@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0] - 2026-03-01
+
+### 重构：会话获取改为“文件扫描 + 增量游标”
+
+#### 背景
+- `--session isolated` 的 cron 运行环境可能看不到主会话树，`sessions_list` / `sessions_history` 会漏数据或直接失败
+- 旧方案依赖 session-id 注释或时间窗参数，容易在 `/new`、断网漏跑、同一会话持续 append 等场景下出现缺口
+
+#### 变更
+- 新增 `scripts/scan_sessions_incremental.py`：
+  - 扫描 `~/.openclaw/agents/main/sessions/*.jsonl` 和 `*.jsonl.reset.*`
+  - 每个文件维护 byte offset（只推进到最后一个完整换行，容忍半行 JSON）
+  - 只输出“有价值信号”：user 消息 + assistant 最终回复；忽略 tool/system
+- 防套娃（递归污染）：
+  - cron prompt 第一行统一以 `[cron:` 开头
+  - 扫描器忽略 cron 会话 + 忽略 `memory-<layer> ok` / `NO_REPLY` 通知文本
+- 通知升级：面向 Telegram 群的运营面板
+  - 第一行固定 `memory-<layer> ok`，后续包含 stats + 少量要点
+  - 文档补充 Telegram allowlist：`channels.telegram.groupPolicy=allowlist` + `channels.telegram.groups` + `groupAllowFrom`
+- 新增 `scripts/patch-openai-sse-empty-data.sh`：
+  - 修复 OpenAI Responses streaming 遇到 SSE 空 `data:` 时的崩溃（给 SDK 的 `dist/streaming.*` 加 guard）
+- `scripts/setup.sh` 更新：
+  - 自动安装/复制 helper scripts 到 `~/.openclaw/workspace/scripts/`
+  - 创建 `memory/_state/` 目录
+  - Hourly 默认改为 `0 7,11,15,19,23 * * *`（Asia/Shanghai）
+- `.gitignore` 增加忽略 `memory/_state` 与备份文件
+
 ## [0.5.0] - 2026-02-27
 
 ### 修复：Hourly Cron 连续超时
@@ -88,7 +115,7 @@
    ```bash
    npm install -g @tobilu/qmd
    # 将 openclaw.json 中的 qmd 命令从 bun 版改为 npm 版
-   # "command": "/Users/abel/.npm-global/bin/qmd"
+   # "command": "<PATH_TO_QMD>"
    ```
 
 ### 验证修复

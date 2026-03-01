@@ -16,17 +16,18 @@
 
 | 层级 | 频率 | 职责 |
 |---|---|---|
-| L1 Hourly | 白天 5 次（10/13/16/19/22 点） | 轻量检查新活动，有则 append |
+| L1 Hourly | 每天 5 次（7/11/15/19/23 点） | 轻量检查新活动，有则 append |
 | L2 Daily | 每晚 23 点 | 蒸馏全天 session 为结构化日志 |
 | L3 Weekly | 每周日 22 点 | 聚合本周，精简 MEMORY.md |
 
 ## 关键设计
 
-- **Session-ID 幂等**：HTML 注释维护已处理 ID，跨层去重
-- **归档直读**：`/new` 后直接扫描 `.reset.*` 归档文件，不依赖 QMD 索引
-- **QMD 兜底**：归档文件被清理后仍可从 QMD 索引搜索
+- **文件扫描为唯一数据源**：不依赖 `sessions_list/sessions_history`（isolated cron 可能看不到主会话树）
+- **增量游标**：按 session 文件 byte offset 增量扫描（只推进到最后完整换行，容忍半行 JSON）
+- **防套娃**：忽略 `[cron:*]` 会话 + 忽略 `memory-<layer> ok` 通知 + 忽略 tool/system
+- **只提取有价值信号**：user 消息 + assistant 最终回复（忽略 tool 输出）
+- **Telegram 通知**：统一 `memory-<layer> ok` + stats + 少量要点（适合专用群）
 - **断网自愈**：漏跑不丢数据，下次自动补上
-- **`sessions_list` 必须加 `activeMinutes`**：否则返回全量数据导致 token 爆炸超时（v0.5.0 踩坑修复）
 
 ## 快速开始
 
@@ -40,13 +41,15 @@ qmd collection add .
 qmd embed
 
 # 3. 配置 openclaw.json（参考 README.md 或 examples/）
-# 4. 添加 3 个 cron job（参考 README.md）
+# 4. 一键创建 cron + helper scripts（推荐）
+bash scripts/setup.sh --tz Asia/Shanghai
 # 5. 重启 gateway
 openclaw gateway restart
 ```
 
 ## 版本历史
 
+- **v0.6.0** (2026-03-01): 文件扫描 + 增量游标重构；防套娃；Telegram 通知格式；OpenAI SSE 空 data 补丁脚本
 - **v0.5.0** (2026-02-27): 修复 hourly cron 超时（sessions_list 加 activeMinutes）
 - **v0.4.0** (2026-02-27): 归档 session 直读 + Session-ID 真幂等
 - **v0.3.0** (2026-02-27): 修复 QMD 索引为空导致系统完全失效

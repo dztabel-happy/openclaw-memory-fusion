@@ -57,8 +57,8 @@ qmd status
 npm install -g @tobilu/qmd
 
 # 修改 openclaw.json 配置
-# 将 "command": "/Users/abel/.bun/bin/qmd" 改为：
-"command": "/Users/abel/.npm-global/bin/qmd"
+# 将 "command" 指向 qmd 可执行文件路径（用 which qmd 获取），例如：
+"command": "<PATH_TO_QMD>"
 
 # 重启 gateway
 openclaw gateway restart
@@ -95,13 +95,17 @@ openclaw cron run <job-id>
 
 ### Cron job 执行但没写入文件
 
-可能是模型没有正确调用工具。尝试：
+常见原因：
+- cron prompt 仍在用旧方案（`sessions_list` / `sessions_history`），隔离 cron 下可能看不到主会话树 → 直接漏数据
+- 模型没有正确调用文件工具（`read`/`write`/`edit` 等）
+- 扫描器 state 被重置（导致重复/漏读；见下）
 
-1. 手动运行查看输出：`openclaw cron run <job-id>`
-2. 检查模型是否有文件写入权限
-3. 换一个更强的模型测试
+建议排查：
+1) 手动运行看输出：`openclaw cron run <job-id>`
+2) 确认 prompt 使用最新模板（见 `docs/cron-prompts.md`），且第一行以 `[cron:` 开头（防套娃）
+3) 观察 `~/.openclaw/workspace/memory/_state/scan_sessions_*.json` 是否持续更新（mtime/offset 变化）
 
-### Cron 格式错误
+### Cron 表达式速查
 
 OpenClaw 使用标准 5-field cron 表达式：
 
@@ -109,8 +113,32 @@ OpenClaw 使用标准 5-field cron 表达式：
 分钟 小时 日 月 星期
 0    23   *  *  *      = 每天 23:00
 0    22   *  *  0      = 每周日 22:00
-0    10,13,16,19,22 * * * = 每天 10/13/16/19/22 点
+0    7,11,15,19,23 * * * = 每天 7/11/15/19/23 点
 ```
+
+### 扫描脚本常见问题
+
+#### 1) sessions dir not found
+
+`scan_sessions_incremental.py` 默认扫描：`~/.openclaw/agents/main/sessions/`。  
+如果你的 agent 名称不是 `main`，在 cron prompt 中显式传参：
+
+```bash
+python3 ~/.openclaw/workspace/scripts/scan_sessions_incremental.py \
+  --openclaw-dir ~/.openclaw \
+  --agent <YOUR_AGENT_NAME> \
+  --state-file ~/.openclaw/workspace/memory/_state/scan_sessions_hourly.json \
+  --format md
+```
+
+#### 2) state 文件被删/损坏导致重复写入
+
+扫描器用 `memory/_state/scan_sessions_*.json` 记录每个 session 文件的 byte offset。  
+如果你删除了 state 文件，下一次扫描会从头读取，**可能导致重复写入记忆**。
+
+建议：
+- 如果只是想“从现在开始重新记”，删除 state 后在记忆文件中手动加一条分界线，避免混淆
+- 如果想“彻底重跑一天/一周”，建议先写到新文件（例如 `memory/rebuild-YYYY-MM-DD.md`），验证后再合并
 
 ## Gateway 相关
 
@@ -173,29 +201,28 @@ for j in data.get('jobs',[]):
         print(f\"{j['name']}: {s.get('lastError')}\")"
 ```
 
-**常见根因：`sessions_list` 未限制范围**
+**常见根因（新方案）**
 
-如果 cron prompt 中调用 `sessions_list` 没有指定 `activeMinutes` 参数，会返回**所有 session** 的数据，token 量可能极大，导致请求超时。
+- 扫描输出过大（一天对话太多）→ 模型总结超时
+- 提示词没有约束“只写小而精的要点”→ 记忆写入过长
 
-**修复**：在 prompt 中指定合理的时间范围：
+**修复建议**
 
-```bash
-# Hourly 用 360 分钟（6 小时）
-sessions_list(activeMinutes=360)
-
-# Daily 用 1440 分钟（24 小时）
-sessions_list(activeMinutes=1440)
-```
+1) 让输出可控（分段处理）  
+在 prompt 中对扫描脚本加限制（比如 `--max-messages`），让下一次 cron 继续补跑：
 
 ```bash
-# 修改 cron prompt
-openclaw cron edit <job-id> --message '新的 prompt 内容...'
-
-# 手动触发验证
-openclaw cron run <job-id>
+python3 ~/.openclaw/workspace/scripts/scan_sessions_incremental.py \
+  --state-file ~/.openclaw/workspace/memory/_state/scan_sessions_daily.json \
+  --format md \
+  --max-chars 8000 \
+  --max-messages 200
 ```
 
-**验证修复**：
+2) 提高 timeout 或提高运行频率（尤其是 daily）  
+例如把 daily 拆成每 6 小时一次（仍使用增量 state，不会重复）。
+
+**验证**：
 
 ```bash
 openclaw cron list --json | python3 -c "
@@ -207,3 +234,87 @@ for j in data.get('jobs',[]):
         print(f\"status: {s.get('lastRunStatus')}\")
         print(f\"consecutiveErrors: {s.get('consecutiveErrors')}\")"
 ```
+
+## Telegram 通知相关
+
+### Cron 通知没有发到群里 / 发错群
+
+要点：**cron 的输出投递目标是在 cron job 的 `delivery.to` 里配置的**，不是在 Telegram 的 group allowlist 里配置的。
+
+排查/配置步骤：
+
+1) 确认机器人已在群里（建议给管理员权限，避免权限问题）。
+2) 拿到群 `chat_id`（通常是 `-100...` 或负数）。
+3) 把 cron 投递目标切到群：
+
+```bash
+openclaw cron edit <memory-hourly-id> --channel telegram --to <GROUP_CHAT_ID> --announce --best-effort-deliver
+openclaw cron edit <memory-daily-id>  --channel telegram --to <GROUP_CHAT_ID> --announce --best-effort-deliver
+openclaw cron edit <memory-weekly-id> --channel telegram --to <GROUP_CHAT_ID> --announce --best-effort-deliver
+```
+
+> 注意：不要把真实 chat_id 提交到任何仓库；用占位符即可。
+
+### 机器人在群里不响应 @ / 群消息被忽略
+
+这通常是 **OpenClaw 的群消息门控**导致的（只影响“接收/响应群消息”，不影响“往群里发通知”）。
+
+如果你配置了：
+
+- `channels.telegram.groupPolicy: "allowlist"`
+
+那你还需要在 `openclaw.json` 里显式允许群与触发者（示例结构，字段以官方文档为准）：
+
+```json5
+{
+  "channels": {
+    "telegram": {
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["<YOUR_TELEGRAM_USER_ID>"]
+      ,
+      "groups": {
+        "<GROUP_CHAT_ID>": {
+          "enabled": true,
+          "requireMention": true
+        }
+      }
+    }
+  }
+}
+```
+
+## OpenAI Responses 流式崩溃（SSE 空 data）
+
+### 症状
+
+使用 OpenAI Responses 的 streaming（`text/event-stream` / SSE）时，偶发出现某些 event 的 `data:` 为空字符串，导致 OpenAI Node SDK 内部 `JSON.parse("")` 报错 `Unexpected end of JSON input`，从而让 cron/普通任务直接失败。
+
+### 判定特征
+
+在 `~/.openclaw/logs/gateway.err.log` 同时出现：
+
+- `Could not parse message into JSON:`（后面是空）
+- `From chunk: [ 'event: response.created' ]`
+- 以及 run end: `Unexpected end of JSON input`
+
+### 修复
+
+使用本仓库提供的补丁脚本，对 **OpenClaw 自带依赖**里的 `openai/core/streaming.js` 打补丁（遇到空 `sse.data` 直接跳过）：
+
+```bash
+# 在这个仓库里执行
+bash scripts/patch-openai-sse-empty-data.sh --restart
+
+# 或者只打补丁不重启
+bash scripts/patch-openai-sse-empty-data.sh
+```
+
+如需手动指定 OpenClaw 安装目录：
+
+```bash
+OPENCLAW_ROOT="$(npm root -g)/openclaw" bash scripts/patch-openai-sse-empty-data.sh --restart
+```
+
+### 注意
+
+- 这是对 vendor 代码打补丁：升级 OpenClaw / 依赖后可能被覆盖，需要重新执行脚本
