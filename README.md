@@ -8,6 +8,32 @@
 - **提炼**来自 LLM（但只喂干净、可控的高信号输入）
 - **落盘**来自 Markdown（可审计、可迁移、可被 QMD 搜索）
 
+
+## 为什么需要这个？
+
+OpenClaw 的记忆能力很强（尤其是配合 QMD），但“**把什么写进记忆**”在默认情况下仍然高度依赖模型自觉。
+
+- 聪明/谨慎的模型会主动写记忆
+- 但很多模型不会（或写得不稳定）
+
+一旦会话被 compaction，没落盘的关键上下文就可能丢失。
+
+本方案用 **三层 cron** 做系统级自动提取/蒸馏/巩固，让“重要对话 → 可检索知识”变成可运维流程。
+
+## 参考与融合来源
+
+| 来源 | 我们采纳/改良的点 |
+|---|---|
+| Calicastle 三层架构 | Hourly/Daily/Weekly 分层分频 |
+| Linux.do 终极记忆系统 | 去噪、剪枝、MEMORY.md 软上限思路 |
+| OpenClaw 官方 | QMD 后端（BM25+向量+reranking）与 sessions transcript 索引 |
+
+链接（仅供阅读，不影响运行）：
+
+- Calicastle: https://x.com/calicastle/status/2021229394724102229
+- Linux.do: https://linux.do/t/topic/1621623
+- OpenClaw Memory/QMD: https://docs.openclaw.ai/concepts/memory
+
 ## 你会得到什么（优势）
 
 ### 1) isolated cron 下也不会“看不到主会话”
