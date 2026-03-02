@@ -113,6 +113,10 @@ State (cursors):      ~/.openclaw/workspace/memory/_state/*.json
 
 > weekly 的“本周”用 ISO week（周一开始）。详见 `scripts/weekly_gate.py`。
 
+## 未来计划 / Roadmap
+
+- `docs/roadmap.md` — L4 (knowledge organization + lookup governance)候选路线与触发条件
+
 ## Repo 内容
 
 - `scripts/scan_sessions_incremental.py`：增量扫描器（byte offset cursors + 去噪 + 防套娃）
