@@ -598,10 +598,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         ignore_cron_sessions=not args.include_cron,
     )
 
-    if args.format == "md":
-        sys.stdout.write(_render_md(report, messages))
-    else:
-        sys.stdout.write(_render_json(report, messages))
+    try:
+        if args.format == "md":
+            sys.stdout.write(_render_md(report, messages))
+        else:
+            sys.stdout.write(_render_json(report, messages))
+    except BrokenPipeError:
+        # e.g. piping into `head` which closes early.
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        return 0
     return 0
 
 

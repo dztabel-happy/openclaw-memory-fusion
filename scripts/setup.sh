@@ -104,9 +104,15 @@ echo "🧩 Step 3: Installing helper scripts..."
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cp -f "$SCRIPT_DIR/scan_sessions_incremental.py" "$WORKSPACE/scripts/scan_sessions_incremental.py"
 chmod +x "$WORKSPACE/scripts/scan_sessions_incremental.py"
+cp -f "$SCRIPT_DIR/lockfile.py" "$WORKSPACE/scripts/lockfile.py"
+chmod +x "$WORKSPACE/scripts/lockfile.py"
+cp -f "$SCRIPT_DIR/weekly_gate.py" "$WORKSPACE/scripts/weekly_gate.py"
+chmod +x "$WORKSPACE/scripts/weekly_gate.py"
 cp -f "$SCRIPT_DIR/patch-openai-sse-empty-data.sh" "$WORKSPACE/scripts/patch-openai-sse-empty-data.sh"
 chmod +x "$WORKSPACE/scripts/patch-openai-sse-empty-data.sh"
 echo "  ✅ $WORKSPACE/scripts/scan_sessions_incremental.py"
+echo "  ✅ $WORKSPACE/scripts/lockfile.py"
+echo "  ✅ $WORKSPACE/scripts/weekly_gate.py"
 echo "  ✅ $WORKSPACE/scripts/patch-openai-sse-empty-data.sh"
 echo ""
 
@@ -142,6 +148,8 @@ else
   SCAN_SCRIPT="$WORKSPACE/scripts/scan_sessions_incremental.py"
   STATE_HOURLY="$WORKSPACE/memory/_state/scan_sessions_hourly.json"
   STATE_DAILY="$WORKSPACE/memory/_state/scan_sessions_daily.json"
+  STATE_WEEKLY="$WORKSPACE/memory/_state/memory-weekly.json"
+  MEMORY_LOCK="$WORKSPACE/memory/_state/MEMORY.lock"
 
   # Hourly
   openclaw cron add \
@@ -159,28 +167,28 @@ else
   # Daily
   openclaw cron add \
     --name "memory-daily" \
-    --cron "0 23 * * *" \
+    --cron "30 23 * * *" \
     --tz "$TZ" \
     --session isolated \
     --agent main \
     --model "$DAILY_MODEL" \
     --timeout-seconds 600 \
-    --message "[cron:memory-daily] 你是每日记忆蒸馏 agent。禁止调用 sessions_list/sessions_history。请用 exec 运行增量扫描脚本获取自上次 daily 以来的新对话：python3 \"$SCAN_SCRIPT\" --state-file \"$STATE_DAILY\" --format md --max-chars 8000。脚本输出已过滤 tool/system/cron/通知，仅保留 user + assistant 最终回复。将今天的重要内容整理为结构化日志写入 memory/YYYY-MM-DD.md（按主题：关键决策/结论、重要信息/偏好、待办/后续行动）。将超过 7 天的 daily log 移到 memory/archive/YYYY/。最后发送 Telegram 通知：第一行 memory-daily ok；随后 stats（新增消息数、写入条目数、归档文件数等）；最多 5 条 bullet（今天最重要的新增记忆/决策）。规则：不要把工具输出写进记忆；不要把自己的通知写进记忆；不要总结任何以 memory- 开头的 ok 消息。" \
+    --message "[cron:memory-daily] 你是每日记忆蒸馏 agent。禁止调用 sessions_list/sessions_history。请用 exec 运行增量扫描脚本获取自上次 daily 以来的新对话：python3 \"$SCAN_SCRIPT\" --state-file \"$STATE_DAILY\" --format md --max-chars 8000。脚本输出已过滤 tool/system/cron/通知，仅保留 user + assistant 最终回复。将今天的重要内容整理为结构化日志写入 memory/YYYY-MM-DD.md（固定写入/更新：## 23:30 日级记忆（自动），按主题：关键决策/结论、重要信息/偏好、待办/后续行动、待核对）。然后维护 MEMORY.md 的滚动区（## 近期重要更新（自动，滚动7天））：先 exec 运行 python3 \"$WORKSPACE/scripts/lockfile.py\" acquire --lock \"$MEMORY_LOCK\" --timeout 120 --stale-seconds 7200；更新滚动区（<=30条，最近7天，每次新增<=5条，必须是可复用的长期偏好/关键决策/关键配置/已验证修复；不确定标注待核对）；最后 exec 运行 python3 \"$WORKSPACE/scripts/lockfile.py\" release --lock \"$MEMORY_LOCK\"。将超过 7 天的 daily log 移到 memory/archive/YYYY/。最后发送 Telegram 通知：第一行 memory-daily ok；随后 stats；最多 5 条 bullet（今天最重要的新增记忆/决策）。规则：不要把工具输出写进记忆；不要把自己的通知写进记忆；不要总结任何以 memory- 开头的 ok 消息。" \
     > /dev/null 2>&1
-  echo "  ✅ memory-daily  (L2: every night at 23:00)"
+  echo "  ✅ memory-daily  (L2: every night at 23:30)"
 
   # Weekly
   openclaw cron add \
     --name "memory-weekly" \
-    --cron "0 22 * * 0" \
+    --cron "20 0 * * *" \
     --tz "$TZ" \
     --session isolated \
     --agent main \
     --model "$WEEKLY_MODEL" \
     --timeout-seconds 900 \
-    --message "[cron:memory-weekly] 你是每周记忆巩固 agent。聚合本周记忆，精简 MEMORY.md。步骤：1) 读取本周所有 memory/YYYY-MM-DD.md 日志；2) 读取当前 MEMORY.md；3) 提取本周新的偏好、决策、项目状态、技术配置、人物关系、重要教训；4) 更新 MEMORY.md：合并新信息到对应分类，剪枝过时/已失效信息，保持精简（软上限约200行），更新最后更新时间；5) 将本周压缩摘要写入 memory/weekly/YYYY-WXX.md（XX=周数）；6) 最后发送 Telegram 通知：第一行 memory-weekly ok；随后小 stats（本周新增条目数、MEMORY.md 行数变化等）；最多 5 条 bullet（本周最重要的记忆点）。规则：不要把自己的通知写进记忆；不要总结任何以 memory- 开头的 ok 消息。" \
+    --message "[cron:memory-weekly] 你是每周记忆巩固 agent。先用 exec 运行 weekly gate：python3 \"$WORKSPACE/scripts/weekly_gate.py\" --mode check --state \"$STATE_WEEKLY\" --timezone \"$TZ\"。若 shouldRun=false：直接回复 Telegram 通知 memory-weekly skipped（包含 weekKey/lastWeekKey）并退出。若 shouldRun=true：读取 suggestedLookbackDays=N（<=30），加载最近 N 天的 memory/YYYY-MM-DD.md + 当前 MEMORY.md；在写 MEMORY.md 前先获取锁：python3 \"$WORKSPACE/scripts/lockfile.py\" acquire --lock \"$MEMORY_LOCK\" --timeout 120 --stale-seconds 7200；执行分类治理（偏好/约束、关键配置、常见故障修复、项目状态等），对滚动区条目做交叉验证后晋升进正式分类并清理滚动区；保存并释放锁；写入 memory/weekly/YYYY-WXX.md；最后 exec 运行 python3 \"$WORKSPACE/scripts/weekly_gate.py\" --mode mark --state \"$STATE_WEEKLY\" --timezone \"$TZ\"；最后发送 Telegram 通知：第一行 memory-weekly ok；随后小 stats；最多 5 条 bullet（本周最重要的记忆点）。规则：不要把自己的通知写进记忆；不要总结任何以 memory- 开头的 ok 消息。" \
     > /dev/null 2>&1
-  echo "  ✅ memory-weekly (L3: every Sunday at 22:00)"
+  echo "  ✅ memory-weekly (L3: daily trigger at 00:20 + weekly gate)"
 fi
 echo ""
 

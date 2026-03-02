@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.0] - 2026-03-02
+
+### 可靠性增强与长期记忆加速
+
+- 新增 A′：daily 维护 `MEMORY.md#近期重要更新（自动，滚动7天）`，weekly 晋升+清理。
+- 新增并发写入保护：`scripts/lockfile.py`（daily/weekly 写 `MEMORY.md` 前加锁）。
+- weekly 改为“每天触发 + gate”：`scripts/weekly_gate.py`，确保每周至少成功一次（ISO week）。
+- `scan_sessions_incremental.py` 吞掉 `BrokenPipeError`（例如 `| head` 场景）。
+- 文档全面同步：README + prompts + troubleshooting + design decisions。
+
 ## [0.6.0] - 2026-03-01
 
 ### 重构：会话获取改为“文件扫描 + 增量游标”

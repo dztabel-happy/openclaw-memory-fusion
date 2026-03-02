@@ -1,72 +1,49 @@
 # OpenClaw Memory Fusion（中文版）
 
-> 完整文档请阅读 [README.md](README.md)，本文件为简要中文说明。
+> 完整文档见 [README.md](README.md)。这里是“快读版”。
 
 ## 这是什么？
 
-一套基于 OpenClaw 原生能力的「永不失忆」记忆方案。通过 3 个定时任务（cron job）自动提取、蒸馏、巩固对话记忆，解决 OpenClaw 默认"靠模型自觉写记忆"的短板。
+一套基于 OpenClaw 原生能力的三层记忆系统（hourly / daily / weekly），解决“默认记忆写入靠模型自觉”的不确定性。
 
-**核心特点**：
-- ✅ 零插件、零额外依赖（仅需 QMD）
-- ✅ 全本地运行，数据完全可控
-- ✅ 不修改任何官方代码，不影响 OpenClaw 升级
-- ✅ 成本极低（约 $0.5/月）
+## 核心优势（一句话版）
 
-## 三层架构
+- **不漏**：以 session JSONL 文件为事实源 + byte offset 增量游标
+- **去噪**：只保留 user + assistant 最终回复
+- **防套娃**：忽略 `[cron:*]` 会话 + 忽略 `memory-*.ok` 通知
+- **更快可用**：daily 维护 `MEMORY.md` 的滚动 7 天区（A′）
+- **更可靠**：`MEMORY.md` 写入锁 + weekly gate（每周至少成功一次）
+
+## 三层设计（推荐调度）
 
 | 层级 | 频率 | 职责 |
-|---|---|---|
-| L1 Hourly | 每天 5 次（7/11/15/19/23 点） | 轻量检查新活动，有则 append |
-| L2 Daily | 每晚 23 点 | 蒸馏全天 session 为结构化日志 |
-| L3 Weekly | 每周日 22 点 | 聚合本周，精简 MEMORY.md |
-
-## 关键设计
-
-- **文件扫描为唯一数据源**：不依赖 `sessions_list/sessions_history`（isolated cron 可能看不到主会话树）
-- **增量游标**：按 session 文件 byte offset 增量扫描（只推进到最后完整换行，容忍半行 JSON）
-- **防套娃**：忽略 `[cron:*]` 会话 + 忽略 `memory-<layer> ok` 通知 + 忽略 tool/system
-- **只提取有价值信号**：user 消息 + assistant 最终回复（忽略 tool 输出）
-- **Telegram 通知**：统一 `memory-<layer> ok` + stats + 少量要点（适合专用群）
-- **断网自愈**：漏跑不丢数据，下次自动补上
+|---|---:|---|
+| L1 Hourly | 7/11/15/19/23 点 | 微同步：有价值才落盘 |
+| L2 Daily | 23:30 | 当天 canonical + A′ 滚动区 |
+| L3 Weekly | 00:20（每天触发但 gate） | 巩固 + 晋升 + 分类治理 |
 
 ## 快速开始
 
 ```bash
-# 1. 安装 QMD（推荐 npm）
+# 1) 安装 QMD（推荐 npm 预编译）
 npm install -g @tobilu/qmd
 
-# 2. 初始化索引
+# 2) 初始化索引
 cd ~/.openclaw/workspace
 qmd collection add .
-qmd embed
+qmd embed   # 可选
 
-# 3. 配置 openclaw.json（参考 README.md 或 examples/）
-# 4. 一键创建 cron + helper scripts（推荐）
+# 3) 配置 openclaw.json（参考 examples/ 与 README.md）
+
+# 4) 一键安装脚本与 cron jobs
 bash scripts/setup.sh --tz Asia/Shanghai
-# 5. 重启 gateway
+
+# 5) 重启 gateway
 openclaw gateway restart
 ```
 
-## 版本历史
+## 文档导航
 
-- **v0.6.0** (2026-03-01): 文件扫描 + 增量游标重构；防套娃；Telegram 通知格式；OpenAI SSE 空 data 补丁脚本
-- **v0.5.0** (2026-02-27): 修复 hourly cron 超时（sessions_list 加 activeMinutes）
-- **v0.4.0** (2026-02-27): 归档 session 直读 + Session-ID 真幂等
-- **v0.3.0** (2026-02-27): 修复 QMD 索引为空导致系统完全失效
-- **v0.2.0** (2026-02-26): memory_search 兜底 + /new flush 机制
-- **v0.1.0** (2026-02-24): 初始版本
-
-详见 [CHANGELOG.md](CHANGELOG.md)。
-
-## 灵感来源
-
-- [Calicastle 三层架构](https://x.com/calicastle/status/2021229394724102229) — 三层分频 cron 设计
-- [Linux.do 终极记忆系统](https://linux.do/t/topic/1621623) — 幂等去重、信号过滤
-- [OpenClaw 官方文档](https://docs.openclaw.ai/concepts/memory) — QMD 后端、session transcript 索引
-
-## 详细文档
-
-- [完整 README](README.md)
-- [设计决策与方案对比](docs/design-decisions.md)
-- [Cron Prompt 详解](docs/cron-prompts.md)
-- [故障排除](docs/troubleshooting.md)
+- 设计决策：`docs/design-decisions.md`
+- Prompt 模板：`docs/cron-prompts.md`
+- 故障排除：`docs/troubleshooting.md`
