@@ -43,6 +43,11 @@ cron 最终回复用于投递到通知群（运营面板），推荐固定格式
 - 第四行：`coverage: pref|decision|config|incident|todo|verify|none`
 - 后面最多 3~5 条 bullet
 
+7) **创建 cron job 时建议启用 `--light-context` + 显式 delivery**
+
+- `--light-context`：减少 isolated cron 的 bootstrap 上下文压力
+- `--announce --channel telegram --to "<TELEGRAM_CHAT_ID>:topic:<TOPIC_ID>"`：避免依赖 last-route
+
 ## Layer 1 — Hourly Micro-Sync
 
 **目的**：轻量安全网。把“自上次 hourly 以来”的新增要点快速落盘。

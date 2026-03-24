@@ -18,3 +18,4 @@ memory/_state/*.json
 *.bak
 *.bak.*
 *.tmp
+.ace-tool/

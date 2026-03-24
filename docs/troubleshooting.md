@@ -20,6 +20,11 @@
 
 并用 `scripts/scan_sessions_incremental.py` + `memory/_state/*.json` 做增量游标。
 
+如果你的 cron prompt 很长、容易超时，额外检查：
+
+- 创建 job 时是否使用了 `--light-context`
+- 是否把“事实采集”尽量前移到脚本（而不是让模型先读一大段 bootstrap/context）
+
 ## 2) 防套娃（递归污染）验证
 
 如果你看到记忆文件里出现：
@@ -58,7 +63,7 @@
   channels: {
     telegram: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["tg:<YOUR_TELEGRAM_USER_ID>", "@alice"],
+      groupAllowFrom: ["tg:<YOUR_TELEGRAM_USER_ID>", "<TELEGRAM_USERNAME>"],
       groups: {
         "<GROUP_CHAT_ID>": { enabled: true, requireMention: true }
       }
@@ -68,6 +73,23 @@
 ```
 
 > 不要把真实 chat id / user id 提交到仓库里。
+
+### 推荐做法
+
+创建 isolated cron 时显式指定 delivery，而不是依赖 last-route：
+
+```bash
+openclaw cron add \
+  --name "memory-hourly" \
+  --session isolated \
+  --light-context \
+  --announce \
+  --channel telegram \
+  --to "<TELEGRAM_CHAT_ID>:topic:<TOPIC_ID>" \
+  --message "..."
+```
+
+这样群/话题路由更稳定，也更符合当前官方 cron delivery 用法。
 
 ## 4) daily/weekly 写 `MEMORY.md` 出现覆盖/冲突
 
@@ -101,7 +123,40 @@ weekly cron 每天触发一次，但本周如果已成功跑过就 `skipped`。�
 
 当前版本已经吞掉 `BrokenPipeError` 并正常退出。
 
-## 7) OpenAI Responses streaming 崩溃（SSE 空 data）
+## 7) 裸 `qmd status` 看起来正常，但 `memory_search` 仍然查不到
+
+### 常见根因
+
+- 你手动跑的 `qmd` 命令和 OpenClaw 实际使用的 **不是同一个 sidecar/XDG home**
+- 于是你暖的是一个索引，Gateway 查的是另一个索引
+
+### 解决
+
+优先检查 OpenClaw 实际使用的状态：
+
+```bash
+openclaw memory status --agent main --index
+```
+
+如果你确实要手动预热同一个 sidecar，请复用 OpenClaw 的 XDG 目录：
+
+```bash
+STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+export XDG_CONFIG_HOME="$STATE_DIR/agents/main/qmd/xdg-config"
+export XDG_CACHE_HOME="$STATE_DIR/agents/main/qmd/xdg-cache"
+
+qmd update
+qmd embed
+qmd query "test" -c memory-root --json >/dev/null 2>&1
+```
+
+另外确认：
+
+- `memory.qmd.command` 指向你当前机器上稳定可用的 `qmd`
+- `memory.qmd.sessions.retentionDays` 不是 `0`
+- `session.maintenance.resetArchiveRetention` 没把你依赖的 `*.reset.*` 过早清掉
+
+## 8) OpenAI Responses streaming 崩溃（SSE 空 data）
 
 ### 症状
 

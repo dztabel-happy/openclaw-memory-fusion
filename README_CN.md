@@ -4,7 +4,12 @@
 
 ## 这是什么？
 
-一套基于 OpenClaw 原生能力的三层记忆系统（hourly / daily / weekly），解决“默认记忆写入靠模型自觉”的不确定性。
+一套基于 OpenClaw 原生能力的三层记忆系统（hourly / daily / weekly），重点补强 deterministic 提取、isolated cron 场景与 Telegram 运维可见性。
+
+说明：
+
+- OpenClaw 近版本已经有 pre-compaction memory flush，也可以配合 `session-memory` hook
+- 本仓库不是替代官方 memory，而是在其上做更强的自动提取与可观测运维
 
 ## 核心优势（一句话版）
 
@@ -25,21 +30,20 @@
 ## 快速开始
 
 ```bash
-# 1) 安装 QMD（推荐 npm 预编译）
+# 1) 安装 QMD（macOS 上继续用 npm 版通常最省心）
 npm install -g @tobilu/qmd
 
-# 2) 初始化索引
-cd ~/.openclaw/workspace
-qmd collection add .
-qmd embed   # 可选
+# 2) 配置 openclaw.json（参考 examples/ 与 README.md）
+#    注意 retentionDays 与 resetArchiveRetention
 
-# 3) 配置 openclaw.json（参考 examples/ 与 README.md）
+# 3) 验证 OpenClaw 实际使用的 memory/QMD 状态
+openclaw memory status --agent main --index
 
-# 4) 一键安装脚本与 cron jobs
-bash scripts/setup.sh --tz Asia/Shanghai
+# 4) 一键安装脚本与 cron jobs（推荐显式指定 Telegram 话题）
+bash scripts/setup.sh --tz Asia/Shanghai --notify-to '<TELEGRAM_CHAT_ID>:topic:<TOPIC_ID>'
 
-# 5) 重启 gateway
-openclaw gateway restart
+# 5) 大多数配置会热加载；只有状态没跟上时再考虑 restart
+openclaw gateway restart   # fallback
 ```
 
 ## 文档导航

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.1] - 2026-03-24
+
+### 与 OpenClaw 2026.3 官方行为对齐（保留 3 cron 架构）
+
+- `scripts/setup.sh`
+  - 新增 `--notify-channel/--notify-to/--notify-account`，支持显式 Telegram/频道投递
+  - 三个 isolated cron job 默认加上 `--light-context`
+  - 不再手动初始化“旁路 QMD collection”；改为提示使用 `openclaw memory status --agent main --index`
+  - 安装总结更新为“配置热加载优先，必要时再 restart gateway”
+- README / README_CN / troubleshooting / cron-prompts
+  - 明确本仓库定位为“补强官方 memory/QMD”，不是替代官方 memory flush / hook
+  - 补充 OpenClaw sidecar/XDG 下的 QMD 预热方式
+  - 补充 `session.maintenance.resetArchiveRetention` 与显式 cron delivery 的注意事项
+
 ## [0.7.0] - 2026-03-02
 
 ### 可靠性增强与长期记忆加速
